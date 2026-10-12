@@ -1,0 +1,13 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "peekaboo-pals": {
+      "type": "remote",
+      "url": "http://127.0.0.1:3001/mcp",
+      "oauth": false,
+      "headers": {
+        "Authorization": "Bearer cda5e232-3408-425e-b02f-e4aaf2300c92"
+      }
+    }
+  }
+}

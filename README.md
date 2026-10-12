@@ -1,0 +1,162 @@
+# Peekaboo Pals
+
+Preact, Vite, TypeScript, and one Rust/Axum backend serving SQLite CRUD,
+uploaded media, the production frontend, and MCP.
+
+## Docker Compose
+
+With Docker and Compose installed, build and start the single app:
+
+```sh
+docker compose up --build -d
+```
+
+Open http://localhost:8080. Rust serves the compiled frontend, `/api`,
+`/uploads`, and `/mcp` from the same container. Node and Vite are only used
+during the image build; no separate frontend server is started.
+
+Retrieve the generated token for parent management and MCP:
+
+```sh
+docker compose exec app cat /data/peekaboo.admin-token
+```
+
+For MCP, use `http://127.0.0.1:8080/mcp` with the same Bearer token.
+Check status/logs or stop the app:
+
+```sh
+docker compose ps
+docker compose logs -f app
+docker compose down
+```
+
+SQLite, uploads, and the admin token are stored in `backend/data`, mounted
+at `/data`. That is the same directory a local backend uses. Rebuilds and
+`docker compose down` leave those files on the host. Do not delete
+`backend/data` unless you intend to erase the catalog, uploads, and token.
+Back up and transfer that directory together if needed.
+
+The image runs as UID 10001 with a read-only application filesystem.
+Only the data volume and temporary directory are writable. The health check
+uses `/api/health`. Builds use both dependency lockfiles.
+
+Port 8080 is bound to loopback by default. Override it with
+`APP_PORT=8090 docker compose up --build -d`. Keep this local binding unless
+you have arranged secure access; hosting publicly requires further setup.
+
+## Run
+
+```sh
+npm install
+source "$HOME/.cargo/env"
+npm run backend
+```
+
+In another terminal, run `npm run dev` and open http://localhost:5173.
+Vite proxies `/api` and `/uploads` to Rust on port 3001.
+For production, run `npm run build`; Rust serves `dist` at http://127.0.0.1:3001.
+
+## Parent Management
+
+Click **Manage library** on the home screen. Unlock it using `ADMIN_TOKEN`,
+or the generated token in `backend/data/peekaboo.admin-token`. The token is
+kept only in frontend memory. The generated token file is private on Unix.
+
+Create, edit, and delete categories and items. Category deletion also deletes
+its items, with confirmation. Each new or edited item requires an uploaded
+image and recorded sound. The screen includes audio previews.
+
+Supported uploads: PNG, JPEG, WebP, MP3, WAV, OGG, M4A; maximum 20 MB per file.
+File signatures are checked, but this is not a full media decoder or malware
+scanner. SVG and HTML uploads are rejected. Files use generated filenames.
+
+Parent settings for spoken names, look time, and finds per level are saved in
+this browser, along with the mute choice. Choose a category on the home screen
+to play. Three items enable level 1;
+eight enable all six levels. Progress is saved separately per category in
+the browser. Uploaded audio plays before spoken prompts. Speech remains the
+fallback for legacy animals and failed playback. Test audio on the child's device.
+
+## Storage And API
+
+The backend creates `backend/data/peekaboo.sqlite` and migrates the existing
+animals into an Animals category once, preserving legacy names and sounds.
+New data lives in `categories`, `items`, and `media`. The original `animals`
+table and `/api/animals` remain for compatibility, not as the active catalog.
+
+Public reads: `GET /api/categories`, `GET /api/items?categoryId=1`.
+Authorized writes: `POST /api/categories`, `PUT`/`DELETE /api/categories/{id}`,
+`POST /api/items`, `PUT`/`DELETE /api/items/{id}`, and `POST /api/uploads`
+(raw file bytes). `GET /api/admin/session` checks the token.
+
+Writes use `Authorization: Bearer <admin-token>`. Item fields:
+`categoryId`, `key`, `name`, `sound` (optional spoken fallback), `image`,
+`audioUrl`, and `color`. Image/audio URLs must come from the upload endpoint.
+Keys are lowercase letters, digits, and hyphens, unique within a category.
+
+Back up the database and upload directory together. Deleting records does not
+delete uploaded files, because media may be shared; unused files remain on disk.
+Data and tokens are ignored by Git.
+
+Environment variables:
+
+- `DATABASE_PATH`: SQLite path; default `backend/data/peekaboo.sqlite`.
+- `UPLOAD_DIR`: media directory; default `backend/data/uploads`.
+- `ADMIN_TOKEN`: secret of at least 16 characters; otherwise generated locally.
+- `BIND_ADDR`: default `127.0.0.1:3001`.
+- `FRONTEND_DIST`: default project `dist` directory.
+- `RUST_LOG`: default `info`. Compose uses the same variable if set.
+
+## MCP In The Rust Server
+
+No separate MCP process or Node MCP dependency is needed.
+Start the Rust backend normally, then configure an MCP client supporting
+**Streamable HTTP** and custom authorization headers:
+
+```json
+{
+  "mcpServers": {
+    "peekaboo-pals": {
+      "type": "http",
+      "url": "http://127.0.0.1:3001/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_ADMIN_TOKEN"
+      }
+    }
+  }
+}
+```
+
+Client configuration keys vary; use the URL and header in your client's format.
+Use the same token as parent management. Keep it in your client's secret store
+when supported, never in a committed config.
+
+Tools: `list_categories`, `create_category`, `update_category`,
+`delete_category`, `list_items`, `create_item`, `update_item`, `delete_item`,
+`upload_media`. Update tools replace fields; list records first and preserve
+unchanged values. Delete tools require `confirm: true` after user approval.
+
+`upload_media` accepts `{"dataBase64":"<base64 file contents>"}` and returns
+`{"url":"/uploads/<generated filename>","kind":"image"}` (or `"audio"`).
+Upload image and sound separately, then use the URLs with item tools. The
+client must be able to supply file contents; Rust never reads arbitrary local
+paths or fetches remote URLs. Large media is usually easier through the UI/API.
+
+The MCP endpoint checks authorization, loopback Host headers, and local browser
+Origins. This is a local-first setup, without OAuth or public hosting support.
+A cloud-hosted LLM cannot reach your localhost directly. Do not expose this
+server publicly without TLS, appropriate host/origin configuration, and access
+controls. Uploaded files and game catalog reads are public to reachable clients.
+
+## Checks
+
+```sh
+npm run build
+npm test
+cargo test --manifest-path backend/Cargo.toml
+cargo clippy --manifest-path backend/Cargo.toml -- -D warnings
+```
+
+Rust 1.88+ is required by the MCP SDK. Local builds bundle SQLite; the
+container links Debian's libsqlite3 so the image does not compile it. Legacy generated
+illustrations and Google Fonts require internet access.
