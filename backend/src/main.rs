@@ -103,6 +103,9 @@ async fn mcp_auth(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Local runs read settings from the repository's .env; real environment
+    // variables win. Docker images never contain .env.
+    let _ = dotenvy::dotenv();
     if env::args().nth(1).as_deref() == Some("--healthcheck") {
         std::process::exit(if healthcheck() { 0 } else { 1 });
     }
@@ -114,11 +117,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dist = env_path("FRONTEND_DIST", "../dist");
     let database_path = env_path("DATABASE_PATH", "data/peekaboo.sqlite");
     if let Some(parent) = database_path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
-        std::fs::create_dir_all(parent)?;
+        std::fs::create_dir_all(parent).map_err(|e| storage_error(parent, e))?;
     }
-    let database = Database::open(&database_path)?;
+    let database = Database::open(&database_path).map_err(|e| storage_error(&database_path, e))?;
     let uploads = env_path("UPLOAD_DIR", "data/uploads");
-    std::fs::create_dir_all(&uploads)?;
+    std::fs::create_dir_all(&uploads).map_err(|e| storage_error(&uploads, e))?;
     let token = admin_token(&database_path.with_extension("admin-token"))?;
     let speech = speech::Speech::from_env();
     if speech.is_none() {
@@ -153,6 +156,16 @@ fn healthcheck() -> bool {
         && response.starts_with(b"HTTP/1.") && &response[9..12] == b"200"
 }
 
+/// Explains a startup storage failure; the usual cause is bind-mount ownership.
+fn storage_error(path: &Path, error: impl std::fmt::Display) -> Box<dyn std::error::Error> {
+    format!(
+        "Cannot write {}: {error}. The data directory must be writable by the app (UID 10001 in Docker). \
+         Compose fixes this with its data-permissions service; otherwise run \
+         `sudo chown -R 10001:10001 backend/data`.",
+        path.display()
+    ).into()
+}
+
 /// Reads a path from the environment, defaulting relative to the backend crate.
 fn env_path(name: &str, default: &str) -> PathBuf {
     env::var_os(name).map(PathBuf::from)
@@ -161,7 +174,9 @@ fn env_path(name: &str, default: &str) -> PathBuf {
 
 /// Uses `ADMIN_TOKEN`, or reads (creating on first run) a private token file.
 fn admin_token(path: &Path) -> Result<String, Box<dyn std::error::Error>> {
-    let token = match env::var("ADMIN_TOKEN") {
+    let token = match env::var("ADMIN_TOKEN").map(|token| token.trim().to_string()).and_then(|token| {
+        if token.is_empty() { Err(env::VarError::NotPresent) } else { Ok(token) }
+    }) {
         Ok(token) if token.len() >= MIN_TOKEN_LEN => return Ok(token),
         Ok(_) => return Err(format!("ADMIN_TOKEN must be at least {MIN_TOKEN_LEN} characters").into()),
         Err(_) if path.exists() => std::fs::read_to_string(path)?.trim().to_string(),

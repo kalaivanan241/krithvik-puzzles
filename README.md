@@ -40,8 +40,10 @@ The image runs as UID 10001 with a read-only application filesystem.
 Only the data volume and temporary directory are writable. The health check
 runs `peekaboo-pals-api --healthcheck`, which probes `/api/health`, so the
 image needs no HTTP client. Compose caps the container at 512 MB and 256
-processes. Builds use both dependency lockfiles. On Linux hosts, make
-`backend/data` writable by UID 10001 (for example `sudo chown -R 10001:10001 backend/data`).
+processes. Builds use both dependency lockfiles. Before the app starts, a one-shot
+`data-permissions` service gives UID 10001 ownership of `backend/data` (only the
+`CHOWN` and `DAC_READ_SEARCH` capabilities, no network), so fresh Linux hosts work
+without manual `chown`. On SELinux hosts, also label the mount (`./backend/data:/data:Z`).
 
 Port 8080 is bound to loopback by default. Override it with
 `APP_PORT=8090 docker compose up --build -d`. Keep this local binding unless
@@ -126,11 +128,12 @@ Back up the database and upload directory together. Deleting records does not
 delete uploaded files, because media may be shared; unused files remain on disk.
 Data and tokens are ignored by Git.
 
-Environment variables:
+Environment variables (copy `.env.example` to `.env`; the backend, Compose, and
+`npm run speech` all read it, and real environment variables take precedence):
 
 - `DATABASE_PATH`: SQLite path; default `backend/data/peekaboo.sqlite`.
 - `UPLOAD_DIR`: media directory; default `backend/data/uploads`.
-- `ADMIN_TOKEN`: secret of at least 16 characters; otherwise generated locally.
+- `ADMIN_TOKEN`: secret of at least 16 characters; empty or unset uses the generated token file.
 - `BIND_ADDR`: default `127.0.0.1:3001`.
 - `FRONTEND_DIST`: default project `dist` directory.
 - `RUST_LOG`: default `info`. Compose uses the same variable if set.

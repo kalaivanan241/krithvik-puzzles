@@ -21,6 +21,7 @@ uuid = { version = "1", features = ["v4"] }
 rmcp = { version = "3.5.1", features = ["transport-streamable-http-server"] }
 base64 = "0.22"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+dotenvy = "0.15.7"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

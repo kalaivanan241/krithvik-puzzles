@@ -1,15 +1,42 @@
 name: peekaboo-pals
 
+x-app-image: &app-image
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: peekaboo-pals:local
+
 services:
+  # One-shot: the app runs as UID 10001, but on Linux hosts ./backend/data is
+  # created by Docker as root or owned by the deploy user. Hand ownership of
+  # anything not yet owned by the app user to it, then exit.
+  data-permissions:
+    <<: *app-image
+    user: root
+    entrypoint: ['find', '/data', '!', '-user', '10001', '-exec', 'chown', '10001:10001', '{}', '+']
+    volumes:
+      - ./backend/data:/data
+    network_mode: none
+    restart: 'no'
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_READ_SEARCH
+    security_opt:
+      - no-new-privileges:true
+
   app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: peekaboo-pals:local
+    <<: *app-image
+    depends_on:
+      data-permissions:
+        condition: service_completed_successfully
     ports:
       - '127.0.0.1:${APP_PORT:-8089}:3001'
     environment:
       RUST_LOG: ${RUST_LOG:-info}
+      # Optional fixed admin token (16+ characters); empty uses the generated token file.
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
       # Voice clips for new items and categories; read from .env, never committed.
       ELEVEN_LABS_API_KEY: ${ELEVEN_LABS_API_KEY:-}
       ELEVEN_LABS_VOICE_ID: ${ELEVEN_LABS_VOICE_ID:-}
