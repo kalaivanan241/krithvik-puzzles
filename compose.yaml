@@ -37,6 +37,8 @@ services:
       RUST_LOG: ${RUST_LOG:-info}
       # Optional fixed admin token (16+ characters); empty uses the generated token file.
       ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+      # Public hostnames allowed to reach /mcp through your TLS proxy (comma-separated).
+      MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-}
       # Voice clips for new items and categories; read from .env, never committed.
       ELEVEN_LABS_API_KEY: ${ELEVEN_LABS_API_KEY:-}
       ELEVEN_LABS_VOICE_ID: ${ELEVEN_LABS_VOICE_ID:-}

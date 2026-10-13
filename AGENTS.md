@@ -74,6 +74,7 @@ using clips from `src/phrases.json` (regenerate with `npm run speech`).
 - CRUD writes and all MCP requests require the same Bearer admin token.
 - Tokens must stay out of logs, frontend bundles, URLs, and committed config.
 - Keep MCP loopback Host and Origin validation; do not weaken it silently.
+  Public hosts are allowed only when listed explicitly in `MCP_ALLOWED_HOSTS` (no wildcards).
 - Item image/audio URLs must refer to registered uploads of the correct kind.
 - Accept only supported passive image/audio formats, with upload size limits.
 - Use generated filenames; reject arbitrary server paths and remote fetching.

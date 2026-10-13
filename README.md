@@ -137,6 +137,8 @@ Environment variables (copy `.env.example` to `.env`; the backend, Compose, and
 - `BIND_ADDR`: default `127.0.0.1:3001`.
 - `FRONTEND_DIST`: default project `dist` directory.
 - `RUST_LOG`: default `info`. Compose uses the same variable if set.
+- `MCP_ALLOWED_HOSTS`: extra public hostnames allowed to reach `/mcp`
+  (comma-separated); empty keeps MCP local-only. See Claude web app.
 - `ELEVEN_LABS_API_KEY`, `ELEVEN_LABS_VOICE_ID`, `ELEVEN_LABS_MODEL_ID`: voice
   clip generation (see Voice Clips). Compose passes them through from `.env`.
 
@@ -175,11 +177,30 @@ Upload image and sound separately, then use the URLs with item tools. The
 client must be able to supply file contents; Rust never reads arbitrary local
 paths or fetches remote URLs. Large media is usually easier through the UI/API.
 
-The MCP endpoint checks authorization, loopback Host headers, and local browser
-Origins. This is a local-first setup, without OAuth or public hosting support.
-A cloud-hosted LLM cannot reach your localhost directly. Do not expose this
-server publicly without TLS, appropriate host/origin configuration, and access
-controls. Uploaded files and game catalog reads are public to reachable clients.
+The MCP endpoint checks authorization, Host headers, and local browser Origins.
+By default only loopback hosts are accepted, so a cloud-hosted client such as
+the Claude web app cannot reach it.
+
+### Claude web app (custom connector)
+
+claude.ai connects from Anthropic's cloud, so the server must be public over HTTPS
+(for example behind a reverse proxy) and must allow your hostname:
+
+1. On the server, set `MCP_ALLOWED_HOSTS=games.example.com` in `.env` (plain
+   hostnames, comma-separated; no scheme or wildcards) and run
+   `docker compose up -d`. Unlisted hosts still get `403`.
+2. In claude.ai, open **Customize > Connectors > Add custom connector**. Enter
+   `https://games.example.com/mcp`, choose **No sign-in**, and under
+   **Request headers** add `authorization` with the value
+   `Bearer YOUR_ADMIN_TOKEN` (include `Bearer `).
+
+Request-header authentication is a claude.ai beta that not every account has. If
+the **Request headers** section is missing, claude.ai can only use OAuth, which
+this server does not implement yet. Use Claude Code or Claude Desktop instead.
+
+A public MCP endpoint is protected only by the admin token: use a long random
+`ADMIN_TOKEN`, never paste it into chats or tickets, and rotate it if exposed.
+Uploaded files and game catalog reads are public to reachable clients.
 
 ## Checks
 

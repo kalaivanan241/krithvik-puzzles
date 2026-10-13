@@ -63,7 +63,21 @@ fn api() -> Router<AppState> {
         .fallback(|| async { (StatusCode::NOT_FOUND, "Unknown API endpoint") })
 }
 
-fn app(dist: PathBuf, state: AppState) -> Router {
+/// MCP `Host` allowlist: loopback names, plus explicit public hostnames from
+/// `MCP_ALLOWED_HOSTS` (comma-separated) for deployments behind a TLS proxy.
+/// Wildcards are rejected so the DNS-rebinding check can't be disabled by accident.
+fn mcp_allowed_hosts(extra: Option<&str>) -> Result<Vec<String>, String> {
+    let mut hosts: Vec<String> = ["localhost", "127.0.0.1", "::1"].map(String::from).into();
+    for host in extra.unwrap_or_default().split(',').map(str::trim).filter(|host| !host.is_empty()) {
+        if host.contains(['*', '/', ' ']) {
+            return Err(format!("MCP_ALLOWED_HOSTS entry {host:?} must be a plain hostname, such as games.example.com"));
+        }
+        hosts.push(host.to_ascii_lowercase());
+    }
+    Ok(hosts)
+}
+
+fn app(dist: PathBuf, state: AppState, mcp_hosts: Vec<String>) -> Router {
     use rmcp::transport::streamable_http_server::{
         session::local::LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService,
     };
@@ -73,6 +87,7 @@ fn app(dist: PathBuf, state: AppState) -> Router {
         // Base64 MCP uploads are about a third larger than the decoded limit.
         .with_max_request_body_bytes(28 * 1024 * 1024);
     config.legacy_session_mode = false;
+    config.allowed_hosts = mcp_hosts;
     config.allowed_origins = vec!["http://localhost:*".into(), "http://127.0.0.1:*".into()];
     let service = StreamableHttpService::new(
         move || Ok(mcp::CatalogMcp(mcp_state.clone())),
@@ -130,9 +145,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("Animal database: {}", database_path.display());
     let listener = tokio::net::TcpListener::bind(&address).await?;
     tracing::info!("Peekaboo Pals listening on http://{}", listener.local_addr()?);
+    let mcp_hosts = mcp_allowed_hosts(env::var("MCP_ALLOWED_HOSTS").ok().as_deref())?;
+    if mcp_hosts.len() > 3 {
+        tracing::info!(hosts = ?&mcp_hosts[3..], "MCP accepts these public hostnames");
+    }
     let state = AppState { db: database, uploads, token, speech };
     tokio::spawn(admin::backfill_speech(state.clone()));
-    axum::serve(listener, app(dist, state))
+    axum::serve(listener, app(dist, state, mcp_hosts))
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     Ok(())
@@ -226,7 +245,8 @@ mod tests {
     use tower::ServiceExt;
 
     fn app_with(db: Database) -> Router {
-        app(PathBuf::from("/nonexistent"), AppState { db, uploads: PathBuf::from("/nonexistent"), token: "test-admin-token-123".into(), speech: None })
+        app(PathBuf::from("/nonexistent"), AppState { db, uploads: PathBuf::from("/nonexistent"), token: "test-admin-token-123".into(), speech: None },
+            mcp_allowed_hosts(Some("games.example.com")).unwrap())
     }
 
     fn test_app() -> Router { app_with(Database::in_memory()) }
@@ -312,6 +332,29 @@ mod tests {
         assert_eq!(mutate(app.clone(), "DELETE", &format!("/api/items/{id}"), serde_json::json!({}), true).await.0, StatusCode::OK);
         db.delete_category(1).await.unwrap();
         assert!(db.items(Some(1)).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn mcp_host_allowlist_accepts_only_configured_public_hosts() {
+        let initialize = serde_json::json!({
+            "jsonrpc":"2.0","id":1,"method":"initialize",
+            "params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"1"}}
+        });
+        let status = |host: &'static str| {
+            let body = initialize.to_string();
+            async move {
+                let request = Request::builder().method("POST").uri("/mcp").header("host", host)
+                    .header("content-type", "application/json").header("accept", "application/json, text/event-stream")
+                    .header("authorization", "Bearer test-admin-token-123").body(Body::from(body)).unwrap();
+                test_app().oneshot(request).await.unwrap().status()
+            }
+        };
+        assert_eq!(status("games.example.com").await, StatusCode::OK);
+        assert_eq!(status("evil.example.com").await, StatusCode::FORBIDDEN);
+        assert_eq!(mcp_allowed_hosts(None).unwrap(), ["localhost", "127.0.0.1", "::1"]);
+        assert_eq!(mcp_allowed_hosts(Some(" Games.Example.com , ")).unwrap().last().unwrap(), "games.example.com");
+        assert!(mcp_allowed_hosts(Some("*")).is_err());
+        assert!(mcp_allowed_hosts(Some("https://games.example.com")).is_err());
     }
 
     #[tokio::test]
