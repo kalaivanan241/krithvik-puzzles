@@ -37,7 +37,9 @@ services:
       RUST_LOG: ${RUST_LOG:-info}
       # Optional fixed admin token (16+ characters); empty uses the generated token file.
       ADMIN_TOKEN: ${ADMIN_TOKEN:-}
-      # Public hostnames allowed to reach /mcp through your TLS proxy (comma-separated).
+      # Public HTTPS origin; enables OAuth so claude.ai can connect to /mcp.
+      PUBLIC_URL: ${PUBLIC_URL:-}
+      # Extra public hostnames allowed to reach /mcp (comma-separated).
       MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-}
       # Voice clips for new items and categories; read from .env, never committed.
       ELEVEN_LABS_API_KEY: ${ELEVEN_LABS_API_KEY:-}

@@ -1,6 +1,7 @@
 mod db;
 mod admin;
 mod mcp;
+mod oauth;
 mod speech;
 
 use axum::{extract::State, http::StatusCode, routing::{get, post, put}, Json, Router};
@@ -17,6 +18,8 @@ pub struct AppState {
     token: String,
     /// ElevenLabs voice generation; `None` when no API key is configured.
     speech: Option<speech::Speech>,
+    /// Public HTTPS origin (`PUBLIC_URL`); enables OAuth for remote MCP clients.
+    public_url: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -99,6 +102,7 @@ fn app(dist: PathBuf, state: AppState, mcp_hosts: Vec<String>) -> Router {
         .layer(axum::middleware::from_fn_with_state(state.clone(), mcp_auth));
     Router::new()
         .merge(mcp_routes)
+        .merge(oauth::routes())
         .nest("/api", api())
         .nest_service("/uploads", ServeDir::new(state.uploads.clone()))
         .fallback_service(ServeDir::new(dist))
@@ -112,8 +116,16 @@ async fn mcp_auth(
     next: axum::middleware::Next,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
-    if let Err(error) = admin::authorize(&state, request.headers()) { return error.into_response(); }
-    next.run(request).await
+    // The admin token (Claude Code, Desktop) or an OAuth access token (claude.ai).
+    let Err(error) = admin::authorize(&state, request.headers()) else { return next.run(request).await };
+    let bearer = request.headers().get("authorization").and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer ")).unwrap_or_default().trim().to_string();
+    if oauth::access_token_is_valid(&state, &bearer).await { return next.run(request).await; }
+    let mut response = error.into_response();
+    if let Some(challenge) = oauth::challenge(&state) {
+        response.headers_mut().insert(axum::http::header::WWW_AUTHENTICATE, challenge);
+    }
+    response
 }
 
 #[tokio::main]
@@ -145,11 +157,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("Animal database: {}", database_path.display());
     let listener = tokio::net::TcpListener::bind(&address).await?;
     tracing::info!("Peekaboo Pals listening on http://{}", listener.local_addr()?);
-    let mcp_hosts = mcp_allowed_hosts(env::var("MCP_ALLOWED_HOSTS").ok().as_deref())?;
+    let public_url = oauth::public_url(env::var("PUBLIC_URL").ok().as_deref())?;
+    let mut mcp_hosts = mcp_allowed_hosts(env::var("MCP_ALLOWED_HOSTS").ok().as_deref())?;
+    if let Some(url) = &public_url {
+        mcp_hosts.push(oauth::public_host(url));
+        tracing::info!(%url, "OAuth enabled for remote MCP clients");
+    }
     if mcp_hosts.len() > 3 {
         tracing::info!(hosts = ?&mcp_hosts[3..], "MCP accepts these public hostnames");
     }
-    let state = AppState { db: database, uploads, token, speech };
+    let state = AppState { db: database, uploads, token, speech, public_url };
     tokio::spawn(admin::backfill_speech(state.clone()));
     axum::serve(listener, app(dist, state, mcp_hosts))
         .with_graceful_shutdown(shutdown_signal())
@@ -245,7 +262,7 @@ mod tests {
     use tower::ServiceExt;
 
     fn app_with(db: Database) -> Router {
-        app(PathBuf::from("/nonexistent"), AppState { db, uploads: PathBuf::from("/nonexistent"), token: "test-admin-token-123".into(), speech: None },
+        app(PathBuf::from("/nonexistent"), AppState { db, uploads: PathBuf::from("/nonexistent"), token: "test-admin-token-123".into(), speech: None, public_url: None },
             mcp_allowed_hosts(Some("games.example.com")).unwrap())
     }
 

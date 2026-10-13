@@ -137,8 +137,10 @@ Environment variables (copy `.env.example` to `.env`; the backend, Compose, and
 - `BIND_ADDR`: default `127.0.0.1:3001`.
 - `FRONTEND_DIST`: default project `dist` directory.
 - `RUST_LOG`: default `info`. Compose uses the same variable if set.
+- `PUBLIC_URL`: public HTTPS origin; enables OAuth for remote MCP clients and
+  allows its host. See Claude web app.
 - `MCP_ALLOWED_HOSTS`: extra public hostnames allowed to reach `/mcp`
-  (comma-separated); empty keeps MCP local-only. See Claude web app.
+  (comma-separated); empty keeps MCP local-only.
 - `ELEVEN_LABS_API_KEY`, `ELEVEN_LABS_VOICE_ID`, `ELEVEN_LABS_MODEL_ID`: voice
   clip generation (see Voice Clips). Compose passes them through from `.env`.
 
@@ -184,21 +186,31 @@ the Claude web app cannot reach it.
 ### Claude web app (custom connector)
 
 claude.ai connects from Anthropic's cloud, so the server must be public over HTTPS
-(for example behind a reverse proxy) and must allow your hostname:
+(for example behind a reverse proxy that forwards everything to the app).
 
-1. On the server, set `MCP_ALLOWED_HOSTS=games.example.com` in `.env` (plain
-   hostnames, comma-separated; no scheme or wildcards) and run
-   `docker compose up -d`. Unlisted hosts still get `403`.
-2. In claude.ai, open **Customize > Connectors > Add custom connector**. Enter
-   `https://games.example.com/mcp`, choose **No sign-in**, and under
-   **Request headers** add `authorization` with the value
-   `Bearer YOUR_ADMIN_TOKEN` (include `Bearer `).
+1. On the server, set `PUBLIC_URL=https://games.example.com` in `.env` and run
+   `docker compose up -d`. This enables OAuth and allows that host for `/mcp`.
+2. In claude.ai, open **Customize > Connectors > Add custom connector** and enter
+   `https://games.example.com/mcp`. Choose **Sign in now** (or keep the default),
+   and **Register automatically** if asked for an OAuth client. Leave the client
+   ID and secret empty.
+3. A "Connect to Peekaboo Pals" page opens. Enter the admin token and click
+   **Approve**. Claude returns to claude.ai with access.
 
-Request-header authentication is a claude.ai beta that not every account has. If
-the **Request headers** section is missing, claude.ai can only use OAuth, which
-this server does not implement yet. Use Claude Code or Claude Desktop instead.
+OAuth here is deliberately simple: the admin token is the only sign-in, entered
+once on the server's own page and never given to the client. Behind it are the
+standard pieces MCP clients expect: protected-resource and authorization-server
+metadata, dynamic client registration, the authorization code grant with
+mandatory PKCE (S256), one-hour access tokens, and rotating 30-day refresh
+tokens. Codes, tokens, and client secrets are stored only as SHA-256 hashes.
+Every grant is tied to the admin token that approved it, so changing
+`ADMIN_TOKEN` disconnects every OAuth client. Clients without OAuth (Claude Code,
+Claude Desktop) can keep sending the admin token as a Bearer header.
 
-A public MCP endpoint is protected only by the admin token: use a long random
+If your account has claude.ai's request-header beta, you can instead choose
+**No sign-in** and add an `authorization` header with `Bearer YOUR_ADMIN_TOKEN`.
+
+A public MCP endpoint is protected by the admin token: use a long random
 `ADMIN_TOKEN`, never paste it into chats or tickets, and rotate it if exposed.
 Uploaded files and game catalog reads are public to reachable clients.
 

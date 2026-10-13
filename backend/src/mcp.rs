@@ -121,7 +121,7 @@ mod tests {
 
     #[tokio::test]
     async fn tools_share_database_and_require_delete_confirmation() {
-        let server = CatalogMcp(AppState { db: Database::in_memory(), uploads: "/nonexistent".into(), token: "test-token-12345678".into(), speech: None });
+        let server = CatalogMcp(AppState { db: Database::in_memory(), uploads: "/nonexistent".into(), token: "test-token-12345678".into(), speech: None, public_url: None });
         assert_eq!(tools().len(), 9);
         let created = server.execute("create_category", json!({"name":"Vehicles"})).await.unwrap();
         let id = created["id"].as_i64().unwrap();

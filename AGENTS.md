@@ -35,6 +35,7 @@ or database service without an explicit request.
 - `backend/src/admin.rs`: authorized CRUD, validation, upload handling.
 - `backend/src/mcp.rs`: tool definitions and shared-handler MCP operations.
 - `backend/src/speech.rs`: ElevenLabs client and item/category phrase templates.
+- `backend/src/oauth.rs`: OAuth 2.1 for remote MCP (metadata, registration, consent page, tokens).
 - `Dockerfile`, `compose.yaml`, `.dockerignore`: build, runtime, persistence, context exclusions.
 
 ## Game Invariants
@@ -71,10 +72,13 @@ using clips from `src/phrases.json` (regenerate with `npm run speech`).
 - Use parameterized SQL and transactional, idempotent migrations.
 - Migrations must not overwrite user edits or recreate intentionally deleted categories.
 - Keep blocking SQLite/file work off Tokio workers where practical.
-- CRUD writes and all MCP requests require the same Bearer admin token.
+- CRUD writes require the Bearer admin token. MCP requests accept the admin token
+  or an OAuth access token; OAuth is enabled only by `PUBLIC_URL`, approval requires
+  the admin token, PKCE S256 is mandatory, and grants die when the admin token changes.
+- Store OAuth codes, tokens, and client secrets only as hashes; never log them.
 - Tokens must stay out of logs, frontend bundles, URLs, and committed config.
 - Keep MCP loopback Host and Origin validation; do not weaken it silently.
-  Public hosts are allowed only when listed explicitly in `MCP_ALLOWED_HOSTS` (no wildcards).
+  Public hosts are allowed only when listed explicitly (`PUBLIC_URL`, `MCP_ALLOWED_HOSTS`; no wildcards).
 - Item image/audio URLs must refer to registered uploads of the correct kind.
 - Accept only supported passive image/audio formats, with upload size limits.
 - Use generated filenames; reject arbitrary server paths and remote fetching.

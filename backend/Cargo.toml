@@ -10,7 +10,7 @@ bundled = ["rusqlite/bundled"]
 
 [dependencies]
 axum = "0.8"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "sync"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "sync", "time"] }
 serde = { version = "1", features = ["derive"] }
 tower-http = { version = "0.6", features = ["fs", "trace"] }
 tracing = "0.1"
@@ -22,6 +22,8 @@ rmcp = { version = "3.5.1", features = ["transport-streamable-http-server"] }
 base64 = "0.22"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 dotenvy = "0.15.7"
+sha2 = "0.11.1"
+serde_urlencoded = "0.7.1"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

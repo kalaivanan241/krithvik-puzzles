@@ -130,7 +130,7 @@ impl Database {
     }
 
     /// Runs a database operation on the blocking thread pool.
-    async fn run<T: Send + 'static>(&self, operation: impl FnOnce(&Connection) -> DbResult<T> + Send + 'static) -> DbResult<T> {
+    pub(crate) async fn run<T: Send + 'static>(&self, operation: impl FnOnce(&Connection) -> DbResult<T> + Send + 'static) -> DbResult<T> {
         let db = self.clone();
         tokio::task::spawn_blocking(move || {
             let connection = db.0.lock().map_err(|e| DbError::Other(e.to_string()))?;

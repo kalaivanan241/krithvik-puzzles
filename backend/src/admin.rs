@@ -264,6 +264,7 @@ mod tests {
         let state = AppState {
             db: Database::in_memory(), uploads: uploads.clone(), token: "test-admin-token-123".into(),
             speech: Speech::new("test-key", &format!("http://{address}"), "voice", "model"),
+            public_url: None,
         };
         let category = |name: &str| CategoryInput { name: name.into(), description: String::new() };
 
