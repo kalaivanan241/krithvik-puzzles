@@ -1,3 +1,5 @@
+import type phrases from "./phrases.json";
+
 let context: AudioContext | undefined;
 const SOUND_KEY = "peekaboo-pals-sound";
 
@@ -14,43 +16,63 @@ let enabled = storedSound();
 export function soundEnabled() {
   return enabled;
 }
-let recording: HTMLAudioElement | undefined;
+let current: HTMLAudioElement | undefined;
 let playbackVersion = 0;
+
+export type PhraseId = keyof typeof phrases;
+/** A fixed game phrase, pre-generated into public/speech by `npm run speech`. */
+export const phraseUrl = (id: PhraseId) => `/speech/${id}.mp3`;
 
 export function stopAudio() {
   playbackVersion++;
-  if (recording) {
-    recording.onended = null;
-    recording.onerror = null;
-    recording.pause();
-    recording = undefined;
+  if (current) {
+    current.onended = null;
+    current.onerror = null;
+    current.pause();
+    current = undefined;
   }
-  cancelSpeech();
 }
 
-export function playSound(url: string, fallback: string, question: string) {
+/**
+ * Plays steps in order. Each step lists candidate clip URLs; the first one
+ * that plays is used, and missing or failing candidates fall through.
+ */
+export function playSequence(steps: (string | undefined)[][]) {
   stopAudio();
   if (!enabled) return;
-  if (!url) {
-    say(`${fallback} ${question}`);
-    return;
-  }
   const version = playbackVersion;
-  const audio = new Audio(url);
-  recording = audio;
-  audio.onended = () => {
-    if (version === playbackVersion) {
-      recording = undefined;
-      say(question);
-    }
-  };
-  const failed = () => {
+  const queue = steps
+    .map((step) => step.filter((url): url is string => Boolean(url)))
+    .filter((step) => step.length > 0);
+  const play = (step: number, candidate: number) => {
     if (version !== playbackVersion) return;
-    stopAudio();
-    say(`${fallback} ${question}`);
+    if (step >= queue.length) {
+      current = undefined;
+      return;
+    }
+    const url = queue[step][candidate];
+    if (url === undefined) return play(step + 1, 0);
+    const audio = new Audio(url);
+    current = audio;
+    let settled = false;
+    const advance = (nextStep: number, nextCandidate: number) => {
+      if (settled) return;
+      settled = true;
+      play(nextStep, nextCandidate);
+    };
+    audio.onended = () => advance(step + 1, 0);
+    audio.onerror = () => advance(step, candidate + 1);
+    void audio.play().catch(() => advance(step, candidate + 1));
   };
-  audio.onerror = failed;
-  void audio.play().catch(failed);
+  play(0, 0);
+}
+
+export function playClip(url: string | undefined) {
+  playSequence([[url]]);
+}
+
+export function sayPhrase(id: PhraseId) {
+  playClip(phraseUrl(id));
 }
 
 export function setSound(value: boolean) {
@@ -69,36 +91,6 @@ export function unlockAudio() {
     void context.resume();
   } catch {
     /* The game remains playable without audio support. */
-  }
-}
-
-export function cancelSpeech() {
-  try {
-    window.speechSynthesis?.cancel();
-  } catch {
-    /* Unsupported browser. */
-  }
-}
-
-export function say(text: string) {
-  if (!enabled) return;
-  try {
-    cancelSpeech();
-    const utterance = new SpeechSynthesisUtterance(text);
-    const voices = speechSynthesis.getVoices();
-    for (const language of ["en-IN", "en-GB", "en-US", "en-AU"]) {
-      const voice = voices.find((v) => v.lang === language);
-      if (voice) {
-        utterance.voice = voice;
-        break;
-      }
-    }
-    utterance.lang = utterance.voice?.lang ?? "en-US";
-    utterance.rate = 0.85;
-    utterance.pitch = 1.2;
-    speechSynthesis.speak(utterance);
-  } catch {
-    /* Visual instructions are always available too. */
   }
 }
 

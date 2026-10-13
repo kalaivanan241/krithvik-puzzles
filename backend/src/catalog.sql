@@ -19,3 +19,8 @@ CREATE TABLE IF NOT EXISTS items (
     UNIQUE(category_id, key)
 );
 CREATE TABLE IF NOT EXISTS migrations (name TEXT PRIMARY KEY);
+-- Generated voice clips, keyed by the exact phrase spoken.
+CREATE TABLE IF NOT EXISTS speech (
+    text TEXT PRIMARY KEY,
+    url TEXT NOT NULL REFERENCES media(url)
+);

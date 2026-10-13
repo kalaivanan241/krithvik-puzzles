@@ -22,7 +22,8 @@ or database service without an explicit request.
 - `src/screens.tsx`: home, play, celebration, and settings views.
 - `src/session.ts`: catalog loading, round timers, taps, and level flow.
 - `src/game.ts`: catalog parsing, illustration mappings, round generation, layout, progress.
-- `src/audio.ts`: uploaded sound playback, speech fallback, tones, audio cleanup.
+- `src/audio.ts`: clip sequencing (uploaded sounds, generated voice clips), tones, audio cleanup.
+- `src/phrases.json`: fixed spoken phrases; `npm run speech` (`scripts/generate-speech.mjs`) renders them to `public/speech`.
 - `src/Management.tsx`: parent category/item CRUD, uploads, audio previews.
 - `src/catalog.ts`: frontend CRUD and upload requests.
 - `src/style.css`: responsive toy-box design and reduced-motion rules.
@@ -33,6 +34,7 @@ or database service without an explicit request.
 - `backend/src/animals.sql`: legacy animal seeds used during initialization.
 - `backend/src/admin.rs`: authorized CRUD, validation, upload handling.
 - `backend/src/mcp.rs`: tool definitions and shared-handler MCP operations.
+- `backend/src/speech.rs`: ElevenLabs client and item/category phrase templates.
 - `Dockerfile`, `compose.yaml`, `.dockerignore`: build, runtime, persistence, context exclusions.
 
 ## Game Invariants
@@ -44,9 +46,11 @@ or database service without an explicit request.
 - Wrong guesses are gentle, never a game-over state.
 - After two misses, hint at the correct card while keeping its touch target stable.
 - Progress is browser-local and separate per category; preserve legacy progress.
-- Clear timers, speech, and recording playback on navigation and new rounds.
+- Clear timers and clip playback on navigation and new rounds.
 - Disable Play until the selected catalog loads; expose retry on loading failure.
-- Uploaded sounds play before spoken prompts; retain legacy speech and playback fallback.
+- Uploaded sounds play before spoken prompts. All speech is pre-generated
+  ElevenLabs audio; never use browser `speechSynthesis`. Missing or failing
+  clips fall through to the next candidate (spoken fallback, fixed question) or silence.
 
 ## UI Conventions
 
@@ -57,7 +61,8 @@ Use inline SVG icons, not emoji.
 Touch targets must be at least 56 px; cards at least 64 px. Keep layouts usable
 on phones, tablets, and rotation without horizontal overflow. Preserve
 `prefers-reduced-motion`, visible keyboard focus, dialog keyboard behavior,
-and accessible loading/error announcements. Instructions must also be spoken.
+and accessible loading/error announcements. Instructions must also be spoken,
+using clips from `src/phrases.json` (regenerate with `npm run speech`).
 
 ## Data And Security
 
@@ -72,6 +77,10 @@ and accessible loading/error announcements. Instructions must also be spoken.
 - Item image/audio URLs must refer to registered uploads of the correct kind.
 - Accept only supported passive image/audio formats, with upload size limits.
 - Use generated filenames; reject arbitrary server paths and remote fetching.
+- The only outbound call is ElevenLabs text-to-speech. `ELEVEN_LABS_API_KEY`
+  lives in `.env`; keep it out of logs, the frontend bundle, and Docker contexts.
+- Item/category voice clips are generated in the shared save operations (UI and MCP),
+  stored as registered audio media, and must never make a save fail.
 - MCP uploads accept base64 contents, not file paths; decoded limit is 20 MB.
 - MCP deletion requires `confirm: true`; obtain user approval before destructive calls.
 - UI and MCP must share validation and database operations.

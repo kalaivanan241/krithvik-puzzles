@@ -1,11 +1,12 @@
 mod db;
 mod admin;
 mod mcp;
+mod speech;
 
-use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
+use axum::{extract::State, http::StatusCode, routing::{get, post, put}, Json, Router};
 use db::{Animal, Database};
 use serde::Serialize;
-use std::{env, path::PathBuf};
+use std::{env, path::{Path, PathBuf}, time::Duration};
 use tower_http::{services::ServeDir, trace::TraceLayer};
 use tracing_subscriber::EnvFilter;
 
@@ -14,6 +15,8 @@ pub struct AppState {
     db: Database,
     uploads: PathBuf,
     token: String,
+    /// ElevenLabs voice generation; `None` when no API key is configured.
+    speech: Option<speech::Speech>,
 }
 
 #[derive(Serialize)]
@@ -25,6 +28,19 @@ struct GameConfig {
     max_level: u8,
 }
 
+const MIN_TOKEN_LEN: usize = 16;
+
+#[derive(Serialize)]
+struct Health { status: &'static str, service: &'static str }
+
+async fn health() -> Json<Health> {
+    Json(Health { status: "ok", service: "peekaboo-pals" })
+}
+
+async fn config() -> Json<GameConfig> {
+    Json(GameConfig { say_name: true, look_seconds: 3, rounds_per_level: 3, max_level: 6 })
+}
+
 async fn animals(State(state): State<AppState>) -> Result<Json<Vec<Animal>>, (StatusCode, &'static str)> {
     state.db.animals().await.map(Json).map_err(|error| {
         tracing::error!(%error, "Failed to load animal catalog");
@@ -34,25 +50,17 @@ async fn animals(State(state): State<AppState>) -> Result<Json<Vec<Animal>>, (St
 
 fn api() -> Router<AppState> {
     Router::new()
-        .route("/health", get(|| async { Json(serde_health()) }))
-        .route("/config", get(|| async {
-            Json(GameConfig { say_name: true, look_seconds: 3, rounds_per_level: 3, max_level: 6 })
-        }))
+        .route("/health", get(health))
+        .route("/config", get(config))
         .route("/animals", get(animals))
-        .route("/admin/session", get(admin::session))
-        .route("/categories", get(admin::categories).post(admin::create_category))
-        .route("/categories/{id}", axum::routing::put(admin::update_category).delete(admin::delete_category))
-        .route("/items", get(admin::items).post(admin::create_item))
-        .route("/items/{id}", axum::routing::put(admin::update_item).delete(admin::delete_item))
-        .route("/uploads", axum::routing::post(admin::upload))
-        .layer(axum::extract::DefaultBodyLimit::max(20 * 1024 * 1024))
+        .route("/admin/session", get(admin::session_handler))
+        .route("/categories", get(admin::categories_handler).post(admin::create_category_handler))
+        .route("/categories/{id}", put(admin::update_category_handler).delete(admin::delete_category_handler))
+        .route("/items", get(admin::items_handler).post(admin::create_item_handler))
+        .route("/items/{id}", put(admin::update_item_handler).delete(admin::delete_item_handler))
+        .route("/uploads", post(admin::upload_handler))
+        .layer(axum::extract::DefaultBodyLimit::max(admin::MAX_UPLOAD_BYTES))
         .fallback(|| async { (StatusCode::NOT_FOUND, "Unknown API endpoint") })
-}
-
-fn serde_health() -> impl Serialize {
-    #[derive(Serialize)]
-    struct Health { status: &'static str, service: &'static str }
-    Health { status: "ok", service: "peekaboo-pals" }
 }
 
 fn app(dist: PathBuf, state: AppState) -> Router {
@@ -62,6 +70,7 @@ fn app(dist: PathBuf, state: AppState) -> Router {
     let mcp_state = state.clone();
     let mut config = StreamableHttpServerConfig::default()
         .with_json_response(true)
+        // Base64 MCP uploads are about a third larger than the decoded limit.
         .with_max_request_body_bytes(28 * 1024 * 1024);
     config.legacy_session_mode = false;
     config.allowed_origins = vec!["http://localhost:*".into(), "http://127.0.0.1:*".into()];
@@ -94,50 +103,83 @@ async fn mcp_auth(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if env::args().nth(1).as_deref() == Some("--healthcheck") {
+        std::process::exit(if healthcheck() { 0 } else { 1 });
+    }
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,tower_http=debug".into()))
         .init();
     let address = env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:3001".into());
-    // Resolve the frontend independently of the shell's working directory.
-    let dist = env::var_os("FRONTEND_DIST").map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../dist"));
-    let database_path = env::var_os("DATABASE_PATH").map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("data/peekaboo.sqlite"));
+    // Resolve default paths independently of the shell's working directory.
+    let dist = env_path("FRONTEND_DIST", "../dist");
+    let database_path = env_path("DATABASE_PATH", "data/peekaboo.sqlite");
     if let Some(parent) = database_path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)?;
     }
     let database = Database::open(&database_path)?;
-    let uploads = env::var_os("UPLOAD_DIR").map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("data/uploads"));
+    let uploads = env_path("UPLOAD_DIR", "data/uploads");
     std::fs::create_dir_all(&uploads)?;
-    let token = match env::var("ADMIN_TOKEN") {
-        Ok(token) if token.len() >= 16 => token,
-        Ok(_) => return Err("ADMIN_TOKEN must be at least 16 characters".into()),
-        Err(_) => {
-            let path = database_path.with_extension("admin-token");
-            if path.exists() { std::fs::read_to_string(&path)?.trim().to_string() }
-            else {
-                let token = uuid::Uuid::new_v4().to_string();
-                let mut options = std::fs::OpenOptions::new();
-                options.write(true).create_new(true);
-                #[cfg(unix)] {
-                    use std::os::unix::fs::OpenOptionsExt;
-                    options.mode(0o600);
-                }
-                use std::io::Write;
-                options.open(&path)?.write_all(token.as_bytes())?;
-                token
-            }
-        }
-    };
-    if token.len() < 16 { return Err("Stored admin token is invalid".into()); }
+    let token = admin_token(&database_path.with_extension("admin-token"))?;
+    let speech = speech::Speech::from_env();
+    if speech.is_none() {
+        tracing::warn!("ELEVEN_LABS_API_KEY is not set; new items and categories will have no voice clips");
+    }
     tracing::info!("Animal database: {}", database_path.display());
     let listener = tokio::net::TcpListener::bind(&address).await?;
     tracing::info!("Peekaboo Pals listening on http://{}", listener.local_addr()?);
-    axum::serve(listener, app(dist, AppState { db: database, uploads, token }))
+    let state = AppState { db: database, uploads, token, speech };
+    tokio::spawn(admin::backfill_speech(state.clone()));
+    axum::serve(listener, app(dist, state))
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     Ok(())
+}
+
+/// Probes `/api/health` on the local listener so container images need no HTTP client.
+fn healthcheck() -> bool {
+    use std::{io::{Read, Write}, net::{SocketAddr, TcpStream}};
+    let bind = env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:3001".into());
+    let Ok(mut address) = bind.parse::<SocketAddr>() else { return false };
+    if address.ip().is_unspecified() {
+        address.set_ip([127, 0, 0, 1].into());
+    }
+    let timeout = Duration::from_secs(3);
+    let Ok(mut stream) = TcpStream::connect_timeout(&address, timeout) else { return false };
+    let _ = stream.set_read_timeout(Some(timeout));
+    let _ = stream.set_write_timeout(Some(timeout));
+    let mut response = [0u8; 12];
+    stream.write_all(b"GET /api/health HTTP/1.0\r\nHost: localhost\r\n\r\n").is_ok()
+        && stream.read_exact(&mut response).is_ok()
+        && response.starts_with(b"HTTP/1.") && &response[9..12] == b"200"
+}
+
+/// Reads a path from the environment, defaulting relative to the backend crate.
+fn env_path(name: &str, default: &str) -> PathBuf {
+    env::var_os(name).map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(default))
+}
+
+/// Uses `ADMIN_TOKEN`, or reads (creating on first run) a private token file.
+fn admin_token(path: &Path) -> Result<String, Box<dyn std::error::Error>> {
+    let token = match env::var("ADMIN_TOKEN") {
+        Ok(token) if token.len() >= MIN_TOKEN_LEN => return Ok(token),
+        Ok(_) => return Err(format!("ADMIN_TOKEN must be at least {MIN_TOKEN_LEN} characters").into()),
+        Err(_) if path.exists() => std::fs::read_to_string(path)?.trim().to_string(),
+        Err(_) => {
+            let token = uuid::Uuid::new_v4().to_string();
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)] {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            use std::io::Write;
+            options.open(path)?.write_all(token.as_bytes())?;
+            token
+        }
+    };
+    if token.len() < MIN_TOKEN_LEN { return Err("Stored admin token is invalid".into()); }
+    Ok(token)
 }
 
 async fn shutdown_signal() {
@@ -168,9 +210,11 @@ mod tests {
     use axum::{body::{to_bytes, Body}, http::Request};
     use tower::ServiceExt;
 
-    fn test_app() -> Router {
-        app(PathBuf::from("/nonexistent"), AppState { db: Database::in_memory(), uploads: PathBuf::from("/nonexistent"), token: "test-admin-token-123".into() })
+    fn app_with(db: Database) -> Router {
+        app(PathBuf::from("/nonexistent"), AppState { db, uploads: PathBuf::from("/nonexistent"), token: "test-admin-token-123".into(), speech: None })
     }
+
+    fn test_app() -> Router { app_with(Database::in_memory()) }
 
     async fn request(path: &str) -> (StatusCode, serde_json::Value) {
         let response = test_app()
@@ -239,9 +283,9 @@ mod tests {
     #[tokio::test]
     async fn item_crud_and_media_validation() {
         let db = Database::in_memory();
-        db.register_media("/uploads/test.png".into(), "image".into()).await.unwrap();
-        db.register_media("/uploads/test.wav".into(), "audio".into()).await.unwrap();
-        let app = app(PathBuf::from("/nonexistent"), AppState { db: db.clone(), uploads: PathBuf::from("/nonexistent"), token: "test-admin-token-123".into() });
+        db.register_media("/uploads/test.png".into(), "image").await.unwrap();
+        db.register_media("/uploads/test.wav".into(), "audio").await.unwrap();
+        let app = app_with(db.clone());
         let mut data = serde_json::json!({"categoryId":1,"key":"horse","name":"Horse","image":"/uploads/test.png","audioUrl":"/uploads/test.wav"});
         let (status, created) = mutate(app.clone(), "POST", "/api/items", data.clone(), true).await;
         assert_eq!(status, StatusCode::OK);
@@ -251,7 +295,7 @@ mod tests {
         data["image"] = "/uploads/missing.png".into();
         assert_eq!(mutate(app.clone(), "PUT", &format!("/api/items/{id}"), data, true).await.0, StatusCode::BAD_REQUEST);
         assert_eq!(mutate(app.clone(), "DELETE", &format!("/api/items/{id}"), serde_json::json!({}), true).await.0, StatusCode::OK);
-        db.delete(true, 1).await.unwrap();
+        db.delete_category(1).await.unwrap();
         assert!(db.items(Some(1)).await.unwrap().is_empty());
     }
 

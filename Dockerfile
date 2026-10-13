@@ -6,6 +6,7 @@ COPY package.json package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm \
     npm ci --no-audit --no-fund
 COPY index.html tsconfig.json vite.config.ts ./
+COPY public ./public
 COPY src ./src
 RUN npm run build
 
@@ -28,15 +29,19 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     && cp target/release/peekaboo-pals-api /peekaboo-pals-api
 
 FROM debian:bookworm-slim AS runtime
+LABEL org.opencontainers.image.title="Peekaboo Pals" \
+      org.opencontainers.image.description="Peekaboo Pals frontend, API, uploads, and MCP in one Rust process"
+# Only the SQLite runtime is needed: ElevenLabs HTTPS calls use bundled
+# rustls root certificates, so no CA package or HTTP client is installed.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl libsqlite3-0 \
+    && apt-get install -y --no-install-recommends libsqlite3-0 \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 app \
     && useradd --uid 10001 --gid app --no-create-home app \
     && mkdir -p /app/dist /data \
     && chown app:app /data
 WORKDIR /app
-COPY --from=backend /peekaboo-pals-api /app/peekaboo-pals-api
+COPY --from=backend --chmod=0555 /peekaboo-pals-api /app/peekaboo-pals-api
 COPY --from=frontend /build/dist /app/dist
 ENV BIND_ADDR=0.0.0.0:3001 \
     FRONTEND_DIST=/app/dist \
@@ -46,5 +51,5 @@ ENV BIND_ADDR=0.0.0.0:3001 \
 USER app
 EXPOSE 3001
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD ["curl", "--fail", "--silent", "--max-time", "3", "http://127.0.0.1:3001/api/health"]
+    CMD ["/app/peekaboo-pals-api", "--healthcheck"]
 ENTRYPOINT ["/app/peekaboo-pals-api"]

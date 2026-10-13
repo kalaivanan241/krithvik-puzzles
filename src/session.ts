@@ -1,13 +1,23 @@
 import { useEffect, useRef, useState } from "preact/hooks";
-import { playSound, say, stopAudio, tones, unlockAudio } from "./audio";
+import {
+  phraseUrl,
+  playClip,
+  playSequence,
+  sayPhrase,
+  stopAudio,
+  tones,
+  unlockAudio,
+} from "./audio";
 import { api, type Category } from "./catalog";
 import {
   availableLevels,
+  levelCompletePhrase,
+  levelStartPhrase,
   lookDuration,
   loadAnimals,
   makeRound,
-  praise,
-  promptText,
+  praisePhrase,
+  soundOnlyPhrase,
   writeProgress,
   type Animal,
   type Settings,
@@ -33,13 +43,7 @@ export function useCatalog(attempt: number) {
     }, 10000);
     let active = true;
     setStatus("loading");
-    void api<Category[]>(
-      "/categories",
-      "GET",
-      undefined,
-      undefined,
-      controller.signal,
-    )
+    void api<Category[]>("/categories", { signal: controller.signal })
       .then(async (list) => {
         if (!active) return null;
         setCategories(list);
@@ -111,31 +115,36 @@ export function useSession(input: {
   const later = (fn: () => void, ms: number) => {
     timers.current.push(setTimeout(fn, ms));
   };
-  function clearAll() {
+  function cancelPending() {
     timers.current.forEach(clearTimeout);
     timers.current = [];
     stopAudio();
+  }
+  function clearAll() {
+    cancelPending();
     tapLock.current = true;
   }
-  useEffect(() => {
-    return () => {
-      timers.current.forEach(clearTimeout);
-      timers.current = [];
-      stopAudio();
-    };
-  }, []);
+  useEffect(() => cancelPending, []);
   useEffect(() => {
     lastTarget.current = null;
   }, [categoryId]);
 
+  function updateCards(update: (card: Card) => Card, key?: string) {
+    setCards((current) =>
+      current.map((c) => (key === undefined || c.key === key ? update(c) : c)),
+    );
+  }
+
   function prompt(key: string, again = false) {
     const animal = animals.find((a) => a.key === key);
     if (!animal) return;
-    playSound(
-      animal.audioUrl ?? "",
-      animal.sound,
-      promptText(animal.name, settings.sayName, again),
-    );
+    // The uploaded sound (or its spoken fallback), then the question. A missing
+    // named prompt falls back to the fixed sound-only question.
+    const named = again ? animal.speech.retry : animal.speech.prompt;
+    playSequence([
+      [animal.audioUrl, animal.speech.sound],
+      [settings.sayName ? named : undefined, phraseUrl(soundOnlyPhrase(again))],
+    ]);
   }
 
   function newRound(nextLevel: number, nextRound: number) {
@@ -157,7 +166,7 @@ export function useSession(input: {
     later(tick, 50);
     later(() => {
       setPhase("hide");
-      setCards((current) => current.map((c) => ({ ...c, up: false })));
+      updateCards((c) => ({ ...c, up: false }));
       tones("flip");
       later(() => {
         setPhase("find");
@@ -174,7 +183,7 @@ export function useSession(input: {
     setLevel(nextLevel);
     setScreen("play");
     newRound(nextLevel, 0);
-    say(`Level ${nextLevel}. Look carefully!`);
+    sayPhrase(levelStartPhrase(nextLevel));
   }
 
   function finishLevel() {
@@ -184,11 +193,7 @@ export function useSession(input: {
     writeProgress(categoryId, nextCleared);
     const won = level === availableLevels(animals.length);
     setScreen(won ? "win" : "done");
-    say(
-      won
-        ? "You found all your pals! Amazing! Would you like to play again?"
-        : `Great job! Level ${level} complete. Ready for the next level?`,
-    );
+    sayPhrase(won ? "win" : levelCompletePhrase(level));
   }
 
   function tapCard(key: string) {
@@ -197,31 +202,25 @@ export function useSession(input: {
     stopAudio();
     if (key === target) {
       setPhase("right");
-      setCards((current) =>
-        current.map((c) => (c.key === key ? { ...c, up: true } : c)),
-      );
+      updateCards((c) => ({ ...c, up: true }), key);
       tones("right");
-      say(praise(round));
+      sayPhrase(praisePhrase(round));
       later(() => {
         if (round + 1 >= settings.roundsPerLevel) finishLevel();
         else {
           newRound(level, round + 1);
-          say("Look carefully!");
+          sayPhrase("look-carefully");
         }
       }, 2300);
     } else {
       const named = animals.find((a) => a.key === key);
       setPhase("oops");
       setMisses((value) => value + 1);
-      setCards((current) =>
-        current.map((c) => (c.key === key ? { ...c, up: true, wrong: true } : c)),
-      );
+      updateCards((c) => ({ ...c, up: true, wrong: true }), key);
       tones("wrong");
-      if (named) say(`That is the ${named.name.toLowerCase()}.`);
+      playClip(named?.speech.reveal);
       later(() => {
-        setCards((current) =>
-          current.map((c) => ({ ...c, up: false, wrong: false })),
-        );
+        updateCards((c) => ({ ...c, up: false, wrong: false }));
         setPhase("find");
         tapLock.current = false;
         prompt(target, true);

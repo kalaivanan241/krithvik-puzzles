@@ -1,7 +1,7 @@
 import { House, Settings2, ShieldCheck, Sparkles, Volume2, VolumeX } from "lucide-preact";
 import { render } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
-import { setSound, soundEnabled, unlockAudio } from "./audio";
+import { playClip, setSound, soundEnabled, unlockAudio } from "./audio";
 import {
   hasStoredSettings,
   loadSettings,
@@ -27,6 +27,7 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settingsStored = useRef(hasStoredSettings());
   const settingsButton = useRef<HTMLButtonElement>(null);
+  const reloadCatalog = () => setCatalogAttempt((value) => value + 1);
   const levels = availableLevels(catalog.animals.length);
   const nextLevel = nextUnlockedLevel(cleared, levels);
   const session = useSession({
@@ -77,6 +78,11 @@ function App() {
   function home() {
     session.home();
   }
+  function chooseCategory(id: number) {
+    unlockAudio();
+    playClip(catalog.categories.find((c) => c.id === id)?.speech?.name);
+    catalog.chooseCategory(id);
+  }
 
   return (
     <div class="app-shell">
@@ -125,7 +131,7 @@ function App() {
         <Management
           onClose={() => {
             home();
-            setCatalogAttempt((v) => v + 1);
+            reloadCatalog();
           }}
         />
       )}
@@ -138,13 +144,13 @@ function App() {
           cleared={cleared}
           available={levels}
           nextLevel={nextLevel}
-          onChooseCategory={catalog.chooseCategory}
+          onChooseCategory={chooseCategory}
           onManage={() => {
             session.clearAll();
             setScreen("manage");
           }}
           onPlay={session.startLevel}
-          onRetry={() => setCatalogAttempt((value) => value + 1)}
+          onRetry={reloadCatalog}
         />
       )}
       {screen === "play" && (

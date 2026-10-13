@@ -7,9 +7,13 @@ services:
       dockerfile: Dockerfile
     image: peekaboo-pals:local
     ports:
-      - "127.0.0.1:${APP_PORT:-8080}:3001"
+      - '127.0.0.1:${APP_PORT:-8089}:3001'
     environment:
       RUST_LOG: ${RUST_LOG:-info}
+      # Voice clips for new items and categories; read from .env, never committed.
+      ELEVEN_LABS_API_KEY: ${ELEVEN_LABS_API_KEY:-}
+      ELEVEN_LABS_VOICE_ID: ${ELEVEN_LABS_VOICE_ID:-}
+      ELEVEN_LABS_MODEL_ID: ${ELEVEN_LABS_MODEL_ID:-}
     volumes:
       - ./backend/data:/data
     restart: unless-stopped
@@ -21,9 +25,12 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+    # Uploads are capped at 20 MB (about 28 MB as base64 over MCP), so this leaves headroom.
+    mem_limit: 512m
+    pids_limit: 256
     stop_grace_period: 15s
     logging:
       driver: json-file
       options:
-        max-size: "10m"
-        max-file: "3"
+        max-size: '10m'
+        max-file: '3'

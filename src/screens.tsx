@@ -21,6 +21,7 @@ import {
   isUploaded,
   MAX_LEVEL,
   previewPals,
+  promptText,
   type Animal,
   type Settings,
 } from "./game";
@@ -286,6 +287,27 @@ export function HomeScreen(props: {
   );
 }
 
+const INSTRUCTIONS: Record<Exclude<Phase, "find">, string> = {
+  show: "Take a little look…",
+  hide: "Where did they go?",
+  right: "You found your friend!",
+  oops: "A little surprise! Try again.",
+};
+
+function cardClass(card: Card, phase: Phase, target: string, misses: number) {
+  const isTarget = card.key === target;
+  return [
+    "animal-card",
+    card.up && "is-up",
+    card.wrong && "is-wrong",
+    phase === "right" && isTarget && "is-correct",
+    phase === "find" && misses >= 2 && isTarget && "is-hint",
+    isUploaded(card.image) && "is-upload",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
 export function PlayScreen(props: {
   level: number;
   round: number;
@@ -346,17 +368,9 @@ export function PlayScreen(props: {
       </div>
       <div class="game-instruction" aria-live="polite">
         <h2>
-          {phase === "show"
-            ? "Take a little look…"
-            : phase === "hide"
-              ? "Where did they go?"
-              : phase === "right"
-                ? "You found your friend!"
-                : phase === "oops"
-                  ? "A little surprise! Try again."
-                  : settings.sayName
-                    ? `Where is the ${targetAnimal?.name.toLowerCase()}?`
-                    : "Who says that?"}
+          {phase === "find"
+            ? promptText(targetAnimal?.name ?? "", settings.sayName)
+            : INSTRUCTIONS[phase]}
         </h2>
         {phase === "show" ? (
           <div class="countdown">
@@ -387,7 +401,7 @@ export function PlayScreen(props: {
           <button
             key={card.key}
             style={{ width: layout.size, height: layout.size }}
-            class={`animal-card ${card.up ? "is-up" : ""} ${card.wrong ? "is-wrong" : ""} ${phase === "right" && card.key === target ? "is-correct" : ""} ${phase === "find" && misses >= 2 && card.key === target ? "is-hint" : ""} ${isUploaded(card.image) ? "is-upload" : ""}`}
+            class={cardClass(card, phase, target, misses)}
             onClick={() => onTap(card.key)}
             disabled={phase !== "find"}
             aria-label={

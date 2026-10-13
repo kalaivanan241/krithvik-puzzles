@@ -8,7 +8,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 0.0.0.0",
     "test": "vitest run",
-    "backend": "cargo run --manifest-path backend/Cargo.toml"
+    "backend": "cargo run --manifest-path backend/Cargo.toml",
+    "speech": "node --env-file=.env scripts/generate-speech.mjs"
   },
   "dependencies": {
     "lucide-preact": "^0.468.0",

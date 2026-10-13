@@ -1,3 +1,10 @@
+import type { PhraseId } from "./audio";
+
+/** Generated voice clip URLs for an item, from the backend's ElevenLabs integration. */
+export type ItemSpeech = Partial<Record<SpeechSlot, string>>;
+const SPEECH_SLOTS = ["prompt", "retry", "reveal", "sound"] as const;
+type SpeechSlot = (typeof SPEECH_SLOTS)[number];
+
 export type Animal = {
   key: string;
   name: string;
@@ -5,6 +12,7 @@ export type Animal = {
   color: string;
   image: string;
   audioUrl?: string;
+  speech: ItemSpeech;
 };
 const illustration = (animal: string, background: string) =>
   `https://coresg-normal.trae.ai/api/ide/v1/text_to_image?prompt=${encodeURIComponent(`Children's picture book illustration of one adorable smiling ${animal}, centered full body, simple flat vector style, thick soft rounded outlines, clean ${background} background, warm pastel colors, charming friendly face, no text, no letters, no border, high quality polished educational game artwork`)}&image_size=square`;
@@ -41,6 +49,26 @@ export const ANIMAL_ART: Record<string, Pick<Animal, "color" | "image">> = {
   },
 };
 
+export const DEFAULT_CARD_COLOR = "#ffe7b8";
+
+/** An item's uploaded image, or the built-in illustration for legacy animals. */
+export function itemImage(item: {
+  key: string;
+  image?: string;
+}): string | undefined {
+  return item.image || ANIMAL_ART[item.key]?.image;
+}
+
+export function parseSpeech(data: unknown): ItemSpeech {
+  const speech: ItemSpeech = {};
+  if (!data || typeof data !== "object") return speech;
+  for (const slot of SPEECH_SLOTS) {
+    const url = (data as Record<string, unknown>)[slot];
+    if (typeof url === "string" && isUploaded(url)) speech[slot] = url;
+  }
+  return speech;
+}
+
 export function parseAnimals(data: unknown): Animal[] {
   if (!Array.isArray(data)) throw new Error("The item catalog is invalid.");
   const seen = new Set<string>();
@@ -52,7 +80,7 @@ export function parseAnimals(data: unknown): Animal[] {
       !row.name.trim() ||
       typeof row.sound !== "string" ||
       seen.has(row.key) ||
-      (!row.image && !Object.hasOwn(ANIMAL_ART, row.key))
+      !itemImage(row)
     ) {
       throw new Error("The animal catalog is invalid.");
     }
@@ -61,9 +89,10 @@ export function parseAnimals(data: unknown): Animal[] {
       key: row.key,
       name: row.name,
       sound: row.sound,
-      image: row.image || ANIMAL_ART[row.key]?.image,
-      color: row.color || ANIMAL_ART[row.key]?.color || "#ffe7b8",
+      image: itemImage(row)!,
+      color: row.color || ANIMAL_ART[row.key]?.color || DEFAULT_CARD_COLOR,
       audioUrl: row.audioUrl || "",
+      speech: parseSpeech(row.speech),
     };
   });
 }
@@ -158,14 +187,23 @@ export function promptText(name: string, sayName: boolean, again = false) {
   return `${again ? "Try again! " : ""}${question}`;
 }
 
-const PRAISE = [
-  "You found it! Well done!",
-  "Amazing! You did it!",
-  "Great remembering!",
-];
+const PRAISE_PHRASES = 3;
 
-export function praise(round: number) {
-  return PRAISE[round % PRAISE.length];
+export function praisePhrase(round: number): PhraseId {
+  return `praise-${round % PRAISE_PHRASES}` as PhraseId;
+}
+
+export function levelStartPhrase(level: number): PhraseId {
+  return `level-start-${level}` as PhraseId;
+}
+
+export function levelCompletePhrase(level: number): PhraseId {
+  return `level-complete-${level}` as PhraseId;
+}
+
+/** The fixed clip asking which item makes the sound, for sound-only clues. */
+export function soundOnlyPhrase(again = false): PhraseId {
+  return again ? "try-again-who-says-that" : "who-says-that";
 }
 
 export function writeProgress(categoryId: number | undefined, cleared: number) {
@@ -235,6 +273,7 @@ export function previewPals(animals: readonly Animal[]): [Animal, Animal] {
     sound: name,
     color: ANIMAL_ART[key].color,
     image: ANIMAL_ART[key].image,
+    speech: {},
   });
   const withArt = animals.filter((animal) => animal.image);
   return [

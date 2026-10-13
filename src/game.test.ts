@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ANIMAL_ART,
@@ -8,10 +9,16 @@ import {
   nextUnlockedLevel,
   parseAnimals,
   parseSettings,
-  praise,
+  levelCompletePhrase,
+  levelStartPhrase,
+  MAX_LEVEL,
+  parseSpeech,
+  praisePhrase,
   promptText,
   shuffle,
+  soundOnlyPhrase,
 } from "./game";
+import phrases from "./phrases.json";
 
 const rows = Object.keys(ANIMAL_ART).map((key) => ({
   key,
@@ -107,8 +114,37 @@ describe("levels and prompts", () => {
     expect(promptText("Cow", true)).toBe("Where is the cow?");
     expect(promptText("Cow", true, true)).toBe("Try again! Where is the cow?");
     expect(promptText("Cow", false)).toBe("Who says that?");
-    expect(praise(0)).toBe("You found it! Well done!");
-    expect(praise(3)).toBe(praise(0));
+    expect(phrases[praisePhrase(0)]).toBe("You found it! Well done!");
+    expect(praisePhrase(3)).toBe(praisePhrase(0));
+    expect(phrases[soundOnlyPhrase()]).toBe(promptText("Cow", false));
+    expect(phrases[soundOnlyPhrase(true)]).toBe(promptText("Cow", false, true));
+  });
+  it("has a pre-generated clip for every fixed phrase the game plays", () => {
+    const used = [
+      "look-carefully",
+      "win",
+      soundOnlyPhrase(),
+      soundOnlyPhrase(true),
+      ...Array.from({ length: MAX_LEVEL }, (_, i) => levelStartPhrase(i + 1)),
+      // The last level always ends in the win celebration instead.
+      ...Array.from({ length: MAX_LEVEL - 1 }, (_, i) => levelCompletePhrase(i + 1)),
+      ...[0, 1, 2].map(praisePhrase),
+    ];
+    for (const id of used) {
+      expect(phrases).toHaveProperty(id);
+      expect(existsSync(`public/speech/${id}.mp3`), id).toBe(true);
+    }
+  });
+  it("keeps only uploaded clip URLs for item speech", () => {
+    expect(
+      parseSpeech({
+        prompt: "/uploads/a.mp3",
+        retry: "https://example.com/x.mp3",
+        reveal: 3,
+        extra: "/uploads/b.mp3",
+      }),
+    ).toEqual({ prompt: "/uploads/a.mp3" });
+    expect(parseSpeech(null)).toEqual({});
   });
   it("accepts only parent settings inside the game limits", () => {
     expect(

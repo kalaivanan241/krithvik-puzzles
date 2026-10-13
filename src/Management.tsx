@@ -1,12 +1,34 @@
 import { useEffect, useState } from "preact/hooks";
 import {
   api,
-  uploadFile,
+  uploadMedia,
   type Category,
   type Item,
   type ItemData,
+  type Saved,
 } from "./catalog";
-import { ANIMAL_ART } from "./game";
+import { DEFAULT_CARD_COLOR, itemImage } from "./game";
+
+const emptyItem = (categoryId: number): ItemData => ({
+  categoryId,
+  key: "",
+  name: "",
+  sound: "",
+  image: "",
+  audioUrl: "",
+  color: DEFAULT_CARD_COLOR,
+});
+
+const itemData = ({ id: _id, speech: _speech, ...data }: Item): ItemData =>
+  data;
+
+function savedNotice(what: string, { speech }: Saved) {
+  if (speech === "failed")
+    return `${what} saved, but its voice clips could not be generated. Save again to retry.`;
+  if (speech === "disabled")
+    return `${what} saved. Voice clips are off until ELEVEN_LABS_API_KEY is set.`;
+  return `${what} saved with voice clips.`;
+}
 
 export function Management({ onClose }: { onClose: () => void }) {
   const [token, setToken] = useState("");
@@ -18,16 +40,7 @@ export function Management({ onClose }: { onClose: () => void }) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [itemId, setItemId] = useState<number | null>(null);
-  const blank = (): ItemData => ({
-    categoryId: selected,
-    key: "",
-    name: "",
-    sound: "",
-    image: "",
-    audioUrl: "",
-    color: "#ffe7b8",
-  });
-  const [draft, setDraft] = useState<ItemData>(blank);
+  const [draft, setDraft] = useState<ItemData>(() => emptyItem(selected));
   const [imageFile, setImageFile] = useState<File>();
   const [audioFile, setAudioFile] = useState<File>();
   const [formVersion, setFormVersion] = useState(0);
@@ -35,12 +48,15 @@ export function Management({ onClose }: { onClose: () => void }) {
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
 
+  const loadItems = (id: number, signal?: AbortSignal) =>
+    api<Item[]>(`/items?categoryId=${id}`, { signal });
+
   async function refresh(id = selected) {
     const list = await api<Category[]>("/categories");
     setCategories(list);
     const next = list.some((c) => c.id === id) ? id : (list[0]?.id ?? 0);
     if (next === selected) {
-      setItems(next ? await api<Item[]>(`/items?categoryId=${next}`) : []);
+      setItems(next ? await loadItems(next) : []);
       return;
     }
     setItems([]);
@@ -51,13 +67,7 @@ export function Management({ onClose }: { onClose: () => void }) {
     let active = true;
     if (!selected) setItems([]);
     else
-      void api<Item[]>(
-        `/items?categoryId=${selected}`,
-        "GET",
-        undefined,
-        undefined,
-        controller.signal,
-      )
+      void loadItems(selected, controller.signal)
         .then((rows) => {
           if (active) setItems(rows);
         })
@@ -65,30 +75,29 @@ export function Management({ onClose }: { onClose: () => void }) {
           if (!active || e?.name === "AbortError") return;
           setError(e.message ?? "Could not load items");
         });
-    setItemId(null);
-    setDraft({
-      categoryId: selected,
-      key: "",
-      name: "",
-      sound: "",
-      image: "",
-      audioUrl: "",
-      color: "#ffe7b8",
-    });
-    setImageFile(undefined);
-    setAudioFile(undefined);
-    setFormVersion((v) => v + 1);
+    resetItem();
     return () => {
       active = false;
       controller.abort();
     };
   }, [selected]);
-  function resetItem() {
-    setItemId(null);
-    setDraft(blank());
+  function editItem(id: number | null, data: ItemData) {
+    setItemId(id);
+    setDraft(data);
     setImageFile(undefined);
     setAudioFile(undefined);
     setFormVersion((v) => v + 1);
+  }
+  function resetItem() {
+    editItem(null, emptyItem(selected));
+  }
+  function editCategory(id: number | null, name = "", description = "") {
+    setCategoryId(id);
+    setName(name);
+    setDescription(description);
+  }
+  function resetCategory() {
+    editCategory(null);
   }
   async function action(fn: () => Promise<void>) {
     setBusy(true);
@@ -119,7 +128,7 @@ export function Management({ onClose }: { onClose: () => void }) {
           onSubmit={(e) => {
             e.preventDefault();
             void action(async () => {
-              await api("/admin/session", "GET", undefined, token);
+              await api("/admin/session", { token });
               await refresh();
               setAuthenticated(true);
             });
@@ -164,20 +173,16 @@ export function Management({ onClose }: { onClose: () => void }) {
                       disabled={busy}
                       onClick={() => {
                         setSelected(c.id);
-                        setCategoryId(null);
-                        setName("");
-                        setDescription("");
+                        resetCategory();
                       }}
                     >
                       {c.name} ({c.itemCount})
                     </button>
                     <button
                       disabled={busy}
-                      onClick={() => {
-                        setCategoryId(c.id);
-                        setName(c.name);
-                        setDescription(c.description);
-                      }}
+                      onClick={() =>
+                        editCategory(c.id, c.name, c.description)
+                      }
                     >
                       Edit
                     </button>
@@ -186,16 +191,12 @@ export function Management({ onClose }: { onClose: () => void }) {
                       onClick={() => {
                         if (confirm(`Delete "${c.name}" and all its items?`))
                           void action(async () => {
-                            await api(
-                              `/categories/${c.id}`,
-                              "DELETE",
-                              undefined,
+                            await api(`/categories/${c.id}`, {
+                              method: "DELETE",
                               token,
-                            );
+                            });
                             await refresh();
-                            setCategoryId(null);
-                            setName("");
-                            setDescription("");
+                            resetCategory();
                             setNotice("Category deleted.");
                           });
                       }}
@@ -209,17 +210,17 @@ export function Management({ onClose }: { onClose: () => void }) {
                 onSubmit={(e) => {
                   e.preventDefault();
                   void action(async () => {
-                    await api(
+                    const saved = await api<Saved>(
                       categoryId ? `/categories/${categoryId}` : "/categories",
-                      categoryId ? "PUT" : "POST",
-                      { name, description },
-                      token,
+                      {
+                        method: categoryId ? "PUT" : "POST",
+                        body: { name, description },
+                        token,
+                      },
                     );
                     await refresh();
-                    setName("");
-                    setDescription("");
-                    setCategoryId(null);
-                    setNotice("Category saved.");
+                    resetCategory();
+                    setNotice(savedNotice("Category", saved));
                   });
                 }}
               >
@@ -241,21 +242,21 @@ export function Management({ onClose }: { onClose: () => void }) {
                     onInput={(e) => setDescription(e.currentTarget.value)}
                   />
                 </label>
-                <button class="secondary" disabled={busy}>
-                  Save category
-                </button>
-                {categoryId && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setCategoryId(null);
-                      setName("");
-                      setDescription("");
-                    }}
-                  >
-                    Cancel edit
+                <div class="form-actions">
+                  <button class="secondary" disabled={busy}>
+                    Save category
                   </button>
-                )}
+                  {categoryId && (
+                    <button
+                      type="button"
+                      class="ghost"
+                      disabled={busy}
+                      onClick={resetCategory}
+                    >
+                      Cancel edit
+                    </button>
+                  )}
+                </div>
               </form>
             </section>
             <section class="admin-card">
@@ -267,11 +268,8 @@ export function Management({ onClose }: { onClose: () => void }) {
               <div class="item-list">
                 {items.map((item) => (
                   <article key={item.id}>
-                    {(item.image || ANIMAL_ART[item.key]?.image) && (
-                      <img
-                        src={item.image || ANIMAL_ART[item.key]?.image}
-                        alt={item.name}
-                      />
+                    {itemImage(item) && (
+                      <img src={itemImage(item)} alt={item.name} />
                     )}
                     <div>
                       <strong>{item.name}</strong>
@@ -280,28 +278,20 @@ export function Management({ onClose }: { onClose: () => void }) {
                         <audio controls preload="none" src={item.audioUrl} />
                       ) : (
                         <small>
-                          Legacy speech: upload audio to replace it.
+                          No recorded sound: upload audio to replace the
+                          spoken fallback.
                         </small>
                       )}
+                      <small>
+                        {item.speech?.prompt
+                          ? "Voice clips ready"
+                          : "Voice clips missing: save again to generate"}
+                      </small>
                     </div>
                     <div class="row-actions">
                       <button
                         disabled={busy}
-                        onClick={() => {
-                          setItemId(item.id);
-                          setDraft({
-                            categoryId: item.categoryId,
-                            key: item.key,
-                            name: item.name,
-                            sound: item.sound,
-                            image: item.image,
-                            audioUrl: item.audioUrl,
-                            color: item.color,
-                          });
-                          setImageFile(undefined);
-                          setAudioFile(undefined);
-                          setFormVersion((v) => v + 1);
-                        }}
+                        onClick={() => editItem(item.id, itemData(item))}
                       >
                         Edit
                       </button>
@@ -310,12 +300,10 @@ export function Management({ onClose }: { onClose: () => void }) {
                         onClick={() => {
                           if (confirm(`Delete "${item.name}"?`))
                             void action(async () => {
-                              await api(
-                                `/items/${item.id}`,
-                                "DELETE",
-                                undefined,
+                              await api(`/items/${item.id}`, {
+                                method: "DELETE",
                                 token,
-                              );
+                              });
                               await refresh();
                               resetItem();
                               setNotice("Item deleted.");
@@ -334,29 +322,23 @@ export function Management({ onClose }: { onClose: () => void }) {
                   onSubmit={(e) => {
                     e.preventDefault();
                     void action(async () => {
-                      let image = draft.image,
-                        audioUrl = draft.audioUrl;
-                      if (imageFile) {
-                        const uploaded = await uploadFile(imageFile, token);
-                        if (uploaded.kind !== "image")
-                          throw new Error("Upload a PNG, JPEG, or WebP image.");
-                        image = uploaded.url;
-                      }
-                      if (audioFile) {
-                        const uploaded = await uploadFile(audioFile, token);
-                        if (uploaded.kind !== "audio")
-                          throw new Error("Upload an MP3, WAV, OGG, or M4A sound.");
-                        audioUrl = uploaded.url;
-                      }
-                      await api(
+                      const image = imageFile
+                        ? await uploadMedia(imageFile, "image", token)
+                        : draft.image;
+                      const audioUrl = audioFile
+                        ? await uploadMedia(audioFile, "audio", token)
+                        : draft.audioUrl;
+                      const saved = await api<Saved>(
                         itemId ? `/items/${itemId}` : "/items",
-                        itemId ? "PUT" : "POST",
-                        { ...draft, categoryId: selected, image, audioUrl },
-                        token,
+                        {
+                          method: itemId ? "PUT" : "POST",
+                          body: { ...draft, categoryId: selected, image, audioUrl },
+                          token,
+                        },
                       );
                       await refresh();
                       resetItem();
-                      setNotice("Item saved.");
+                      setNotice(savedNotice("Item", saved));
                     });
                   }}
                 >
@@ -423,14 +405,21 @@ export function Management({ onClose }: { onClose: () => void }) {
                       }
                     />
                   </label>
-                  <button class="secondary" disabled={busy}>
-                    {busy ? "Saving..." : "Save item"}
-                  </button>
-                  {itemId && (
-                    <button type="button" disabled={busy} onClick={resetItem}>
-                      Cancel edit
+                  <div class="form-actions">
+                    <button class="secondary" disabled={busy}>
+                      {busy ? "Saving..." : "Save item"}
                     </button>
-                  )}
+                    {itemId && (
+                      <button
+                        type="button"
+                        class="ghost"
+                        disabled={busy}
+                        onClick={resetItem}
+                      >
+                        Cancel edit
+                      </button>
+                    )}
+                  </div>
                 </form>
               )}
             </section>

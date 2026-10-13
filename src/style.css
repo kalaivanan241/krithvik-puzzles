@@ -1315,12 +1315,40 @@ footer > span {
   width: 100%;
   height: 56px;
 }
-.admin-card button:not(.secondary) {
+.admin-card button:not(.secondary):not(.ghost) {
   min-height: 56px;
   padding: 8px 12px;
   border: 1px solid #e8d6a6;
   background: white;
   border-radius: 12px;
+}
+.form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 22px;
+}
+/* Quiet companion to .secondary: same size and shape, outline only. */
+.ghost {
+  display: flex;
+  align-items: center;
+  min-height: 56px;
+  padding: 10px 22px;
+  border: 2px solid #e8d6a6;
+  border-radius: 16px;
+  background: transparent;
+  color: #4a5670;
+  font-weight: 800;
+}
+.ghost:hover:not(:disabled) {
+  background: #fff4d6;
+  color: #22304a;
+}
+.ghost:disabled,
+.form-actions .secondary:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 .admin-card small {
   display: block;
